@@ -1,0 +1,15 @@
+# Python 3.13.9
+
+pandas==2.3.3
+numpy==2.3.5
+scipy==1.17.1
+
+scikit-learn==1.8.0
+catboost==1.2.10
+optuna==4.8.0
+
+matplotlib==3.10.8
+seaborn==0.13.2
+
+jupyter==1.1.1
+ipykernel==6.31.0
