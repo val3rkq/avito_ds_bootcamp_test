@@ -60,7 +60,6 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         return features.reindex(columns=self.feature_names_)
 
     def _fitted_build(self, X):
-        self.nan_columns_ = None  # состав индикаторов пропусков переопределяем на каждом fit
         features = self._build(X)
         self.feature_names_ = features.columns.tolist()
         return features
@@ -83,8 +82,7 @@ class Preprocessor(BaseEstimator, TransformerMixin):
     def _event_features(self, X):
         """Агрегаты по событиям лида, случившимся СТРОГО ДО его назначения.
 
-        Фильтр event_ts < assignment_ts обязателен: без него в выборку попадает 8.2%
-        событий из будущего относительно момента скоринга (EDA1.5) - прямая утечка.
+        Фильтр event_ts < assignment_ts обязателен для избежания утечки в будущее.
         """
         events = self.events[["lead_id", "event_ts", "event_type", "src_slot",
                               "ctx_seq", "item_price_log"]]
@@ -118,21 +116,17 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         )
         features = features.join(counts)
 
-        # лиды без событий до назначения (0.07%) получают NaN - разберет импутация
+        # лиды без событий до назначения (0.07%) получают NaN
         return features.reindex(X["lead_id"].values).set_index(X.index)
 
 
 class Pipeline:
-    """Вся sklearn-обвязка: Preprocessor -> [ColumnTransformer] -> модель.
-
+    """sklearn-обвязка
+    
     Делегирует fit/predict_proba/predict, поэтому объект подходит как drop-in
     для цикла по фолдам из main.ipynb.
 
-    sklearn_preprocess=False отключает ColumnTransformer и отдаёт модели сырой DataFrame.
-    Нужно для градиентного бустинга (CatBoost): импутация стёрла бы информативность
-    пропусков, скейлинг деревьям не нужен, а One-Hot хуже встроенной обработки категорий.
-    Список категориальных колонок такая модель получает своим параметром
-    cat_features (см. CATEGORICAL_COLUMNS).
+    sklearn_preprocess=False отключает ColumnTransformer и отдаёт модели сырой DataFrame, нужно для Catboost
     """
 
     def __init__(self, events=None, model=None, sklearn_preprocess=True, baseline=False, **preprocessor_kwargs):
@@ -171,8 +165,19 @@ class Pipeline:
         steps.append(("model", self.model))
         return SklearnPipeline(steps=steps)
 
-    def fit(self, X, y):
-        self.pipeline_.fit(X, y)
+    def fit(self, X, y, eval_set=None):
+        if eval_set is None:
+            self.pipeline_.fit(X, y)
+            return self
+        
+        eval_X, eval_y = eval_set
+        # eval_X надо вручную прогнать через шаги пайплайна
+        *pre_steps, (_, model) = self.pipeline_.steps
+        Xt, eval_Xt = X, eval_X
+        for _, step in pre_steps:
+            Xt = step.fit_transform(Xt, y)
+            eval_Xt = step.transform(eval_Xt)
+        model.fit(Xt, y, eval_set=[(eval_Xt, eval_y)])
         return self
 
     def predict_proba(self, X):
